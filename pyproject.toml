@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectral-entropy"
+version = "0.1.0"
+description = "Spectral entropy analysis for GraphCast multi-mesh neural network weights"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "IDC606 Research"}
+]
+keywords = [
+    "graphcast",
+    "spectral-entropy",
+    "neural-networks",
+    "weather-forecasting",
+    "turbulence",
+    "information-theory"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "dm-haiku>=0.0.10",
+    "xarray>=2023.1.0",
+    "gcsfs>=2023.1.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/deepmind/graphcast"
+"Bug Tracker" = "https://github.com/deepmind/graphcast/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["spectral_entropy*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "D", "UP"]
+ignore = ["D100", "D104"]
