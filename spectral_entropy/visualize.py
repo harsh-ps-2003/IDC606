@@ -710,6 +710,365 @@ def create_summary_figure(
     return fig
 
 
+# ============================================================================
+# SVD and Scaling Law Visualizations (Added in v0.3.0)
+# ============================================================================
+
+def plot_singular_value_spectrum(
+    singular_values: np.ndarray,
+    layer_name: str = "Layer",
+    powerlaw_alpha: Optional[float] = None,
+    powerlaw_xmin: Optional[float] = None,
+    save_path: Optional[Union[str, Path]] = None,
+    ax: Optional[plt.Axes] = None,
+    figsize: Tuple[float, float] = (10, 7),
+) -> plt.Figure:
+    """
+    Plot singular value spectrum with optional power-law fit.
+    
+    Args:
+        singular_values: Array of singular values (descending order)
+        layer_name: Name of the layer for title
+        powerlaw_alpha: Power-law exponent (if fitted)
+        powerlaw_xmin: Minimum value for power-law fit
+        save_path: Path to save figure
+        ax: Existing axes to plot on
+        figsize: Figure size
+        
+    Returns:
+        matplotlib Figure object
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+    
+    # Plot singular values
+    ranks = np.arange(1, len(singular_values) + 1)
+    ax.loglog(ranks, singular_values, 'b-', linewidth=1.5, alpha=0.8, 
+              label='Singular values')
+    
+    # Plot power-law fit if provided
+    if powerlaw_alpha is not None and powerlaw_xmin is not None:
+        xmin_idx = np.searchsorted(-singular_values, -powerlaw_xmin)
+        if xmin_idx < len(singular_values) - 1:
+            fit_ranks = ranks[xmin_idx:]
+            # Power-law: σ(r) ~ r^(-1/(α-1))
+            fit_sv = powerlaw_xmin * (fit_ranks / fit_ranks[0]) ** (-1/(powerlaw_alpha - 1))
+            ax.loglog(fit_ranks, fit_sv, 'r--', linewidth=2.5, 
+                     label=f'Power-law fit: α={powerlaw_alpha:.2f}')
+            
+            # Mark xmin
+            ax.axhline(powerlaw_xmin, color='orange', linestyle=':', alpha=0.7,
+                      label=f'$x_{{min}}$={powerlaw_xmin:.4f}')
+    
+    ax.set_xlabel('Rank', fontsize=12)
+    ax.set_ylabel('Singular Value (σ)', fontsize=12)
+    ax.set_title(f'Singular Value Spectrum: {layer_name}', fontsize=14)
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, which='both', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+
+
+def plot_alpha_heatmap(
+    layer_alphas: Dict[str, float],
+    n_cols: int = 10,
+    title: str = "Power-Law Exponent (α) Across Layers",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[float, float] = (14, 8),
+) -> plt.Figure:
+    """
+    Create heatmap of power-law exponents across layers.
+    
+    Args:
+        layer_alphas: Dict mapping layer name to alpha value
+        n_cols: Number of columns in heatmap
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        
+    Returns:
+        matplotlib Figure object
+    """
+    # Sort layers and get alphas
+    layers = sorted(layer_alphas.keys())
+    alphas = [layer_alphas[l] for l in layers]
+    
+    # Reshape into grid
+    n_layers = len(alphas)
+    n_rows = int(np.ceil(n_layers / n_cols))
+    
+    # Pad with NaN if needed
+    padded = alphas + [np.nan] * (n_rows * n_cols - n_layers)
+    grid = np.array(padded).reshape(n_rows, n_cols)
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Create heatmap
+    cmap = plt.cm.RdYlGn_r  # Red = high alpha (light tail), Green = low alpha (heavy tail)
+    im = ax.imshow(grid, cmap=cmap, aspect='auto', vmin=2, vmax=6)
+    
+    # Colorbar
+    cbar = plt.colorbar(im, ax=ax, label='Power-Law Exponent (α)')
+    cbar.ax.axhline(y=2, color='black', linewidth=2)
+    cbar.ax.axhline(y=4, color='black', linewidth=2)
+    
+    # Add text annotations
+    for i in range(n_rows):
+        for j in range(n_cols):
+            idx = i * n_cols + j
+            if idx < n_layers:
+                val = grid[i, j]
+                if np.isfinite(val):
+                    color = 'white' if val > 4 else 'black'
+                    ax.text(j, i, f'{val:.1f}', ha='center', va='center',
+                           fontsize=8, color=color)
+    
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel('Layer Index (mod 10)', fontsize=12)
+    ax.set_ylabel('Layer Group', fontsize=12)
+    
+    plt.tight_layout()
+    
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+
+
+def plot_marchenko_pastur_comparison(
+    singular_values: np.ndarray,
+    shape: Tuple[int, int],
+    layer_name: str = "Layer",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[float, float] = (10, 7),
+) -> plt.Figure:
+    """
+    Compare singular value distribution to Marchenko-Pastur baseline.
+    
+    Args:
+        singular_values: Array of singular values
+        shape: Original matrix shape (m, n)
+        layer_name: Name of the layer
+        save_path: Path to save figure
+        figsize: Figure size
+        
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    m, n = shape
+    Q = max(m/n, n/m)
+    
+    # Compute squared singular values (eigenvalues of W^T W)
+    sv_sq = singular_values ** 2
+    
+    # Normalize by matrix size for comparison with MP
+    normalized_sv_sq = sv_sq / max(m, n)
+    
+    # Estimate variance from bulk
+    variance = np.median(normalized_sv_sq)
+    
+    # MP bounds
+    lambda_plus = variance * (1 + 1/np.sqrt(Q)) ** 2
+    lambda_minus = variance * (1 - 1/np.sqrt(Q)) ** 2
+    
+    # Plot histogram of eigenvalues
+    ax.hist(normalized_sv_sq, bins=50, density=True, alpha=0.7, 
+            color='steelblue', edgecolor='black', label='Empirical')
+    
+    # Plot MP distribution
+    x = np.linspace(lambda_minus * 0.9, lambda_plus * 1.1, 200)
+    x_valid = x[(x >= lambda_minus) & (x <= lambda_plus)]
+    
+    if len(x_valid) > 0:
+        mp_density = Q / (2 * np.pi * variance * x_valid) * \
+                     np.sqrt((lambda_plus - x_valid) * (x_valid - lambda_minus))
+        ax.plot(x_valid, mp_density, 'r-', linewidth=2.5, 
+               label='Marchenko-Pastur')
+    
+    # Mark bounds
+    ax.axvline(lambda_plus, color='orange', linestyle='--', 
+              label=f'λ+ = {lambda_plus:.4f}')
+    ax.axvline(lambda_minus, color='green', linestyle='--', 
+              label=f'λ- = {lambda_minus:.4f}')
+    
+    # Mark outliers
+    n_outliers = np.sum(normalized_sv_sq > lambda_plus * 1.1)
+    if n_outliers > 0:
+        ax.annotate(f'{n_outliers} outliers', 
+                   xy=(lambda_plus * 1.1, 0.1),
+                   fontsize=10, color='red')
+    
+    ax.set_xlabel('Normalized Eigenvalue (σ²/max(m,n))', fontsize=12)
+    ax.set_ylabel('Density', fontsize=12)
+    ax.set_title(f'Marchenko-Pastur Comparison: {layer_name}\n'
+                f'Shape: {shape}, Q={Q:.2f}', fontsize=14)
+    ax.legend(fontsize=10)
+    ax.set_xlim(0, max(normalized_sv_sq) * 1.1)
+    
+    plt.tight_layout()
+    
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+
+
+def plot_scaling_comparison(
+    model_params: np.ndarray,
+    model_alphas: np.ndarray,
+    model_names: List[str],
+    fit_exponent: Optional[float] = None,
+    fit_r_squared: Optional[float] = None,
+    title: str = "Power-Law Exponent vs. Model Size",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[float, float] = (10, 7),
+) -> plt.Figure:
+    """
+    Plot scaling relationship between model size and spectral properties.
+    
+    Args:
+        model_params: Array of parameter counts
+        model_alphas: Array of weighted alpha values
+        model_names: List of model names
+        fit_exponent: Scaling law exponent (if fitted)
+        fit_r_squared: R² of the fit
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Plot data points
+    colors = plt.cm.Set1(np.linspace(0, 1, len(model_names)))
+    for i, (N, alpha, name) in enumerate(zip(model_params, model_alphas, model_names)):
+        ax.scatter(N, alpha, s=200, c=[colors[i]], edgecolors='black', 
+                  linewidths=2, zorder=10, label=name)
+        ax.annotate(name, (N, alpha), xytext=(10, 10), 
+                   textcoords='offset points', fontsize=11)
+    
+    # Plot fit line if provided
+    if fit_exponent is not None:
+        N_fit = np.logspace(np.log10(model_params.min() * 0.5),
+                           np.log10(model_params.max() * 2), 100)
+        # α = C * N^(-exponent)
+        C = model_alphas[0] * model_params[0] ** fit_exponent
+        alpha_fit = C * N_fit ** (-fit_exponent)
+        
+        label = f'Fit: α ∝ N^({-fit_exponent:.3f})'
+        if fit_r_squared is not None:
+            label += f', R²={fit_r_squared:.3f}'
+        ax.plot(N_fit, alpha_fit, 'r--', linewidth=2, label=label)
+    
+    ax.set_xscale('log')
+    ax.set_xlabel('Total Parameters (N)', fontsize=12)
+    ax.set_ylabel('Weighted Power-Law Exponent (α)', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    
+    # Reference lines
+    ax.axhline(2, color='orange', linestyle=':', alpha=0.7, label='α=2 (heavy tail)')
+    ax.axhline(4, color='purple', linestyle=':', alpha=0.7, label='α=4 (moderate)')
+    
+    ax.legend(fontsize=10, loc='best')
+    ax.grid(True, alpha=0.3, which='both')
+    
+    plt.tight_layout()
+    
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+
+
+def plot_turbulence_nn_comparison(
+    model_alphas: Dict[str, float],
+    title: str = "Comparison with Physical Scaling Regimes",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[float, float] = (12, 8),
+) -> plt.Figure:
+    """
+    Compare neural network exponents to physical turbulence regimes.
+    
+    Args:
+        model_alphas: Dict mapping model name to alpha value
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Physical regimes
+    physical_regimes = {
+        'White Noise': 0,
+        'Batchelor (passive scalar)': 1.0,
+        'Kolmogorov (3D turbulence)': 5/3,
+        'Shock-dominated': 2.0,
+        'Enstrophy (2D turbulence)': 3.0,
+    }
+    
+    # Combine all
+    all_regimes = {**physical_regimes}
+    for name, alpha in model_alphas.items():
+        all_regimes[f'NN: {name}'] = alpha
+    
+    # Sort by alpha value
+    sorted_items = sorted(all_regimes.items(), key=lambda x: x[1])
+    names = [item[0] for item in sorted_items]
+    alphas = [item[1] for item in sorted_items]
+    
+    # Color: blue for physical, red for neural networks
+    colors = ['#3498db' if not name.startswith('NN:') else '#e74c3c' 
+              for name in names]
+    
+    y_pos = np.arange(len(names))
+    bars = ax.barh(y_pos, alphas, color=colors, edgecolor='black', linewidth=1.5)
+    
+    # Add value labels
+    for bar, alpha in zip(bars, alphas):
+        ax.text(alpha + 0.05, bar.get_y() + bar.get_height()/2,
+               f'{alpha:.2f}', va='center', fontsize=10)
+    
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(names, fontsize=10)
+    ax.set_xlabel('Power-Law Exponent (α)', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    
+    # Add zones
+    ax.axvspan(2, 4, alpha=0.1, color='green', label='Well-regularized NN zone')
+    ax.axvline(5/3, color='gray', linestyle='--', alpha=0.7, 
+              label='Kolmogorov 5/3')
+    
+    ax.legend(loc='lower right', fontsize=10)
+    ax.set_xlim(0, max(alphas) * 1.2)
+    ax.grid(True, axis='x', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+
+
 if __name__ == "__main__":
     # Demo with synthetic data
     print("Visualization Demo")
