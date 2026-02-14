@@ -1,2 +1,6 @@
 /cursor-azure-integration
 /graphcast
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
