@@ -3,11 +3,12 @@
 Test script for the spectral entropy analysis pipeline.
 
 This script tests all components of the pipeline:
-1. Mesh utilities
+1. Mesh utilities and exact geometry
 2. Weight energy computation
 3. Spectral entropy calculation
 4. Power law fitting
-5. Visualization (optional)
+5. Rigorous analysis methods
+6. Visualization (optional)
 
 Run with: python -m tests.test_pipeline
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
 
 def test_mesh_module():
     """Test mesh.py functionality."""
@@ -30,7 +32,6 @@ def test_mesh_module():
         EARTH_CIRCUMFERENCE_KM,
         compute_wavenumber,
         get_level_spatial_scale,
-        get_edge_length_distribution,
         classify_edge_by_length,
         geodesic_distance,
     )
@@ -52,11 +53,6 @@ def test_mesh_module():
     assert scale0 > scale6  # Coarser levels have larger scales
     print(f"✓ Spatial scale: M0 = {scale0:.0f} km, M6 = {scale6:.0f} km")
     
-    # Test edge length distribution
-    dist = get_edge_length_distribution(3)
-    assert "mean" in dist and "std" in dist
-    print(f"✓ Edge distribution at M3: mean = {dist['mean']:.0f} km")
-    
     # Test edge classification
     level = classify_edge_by_length(1000)
     assert 2 <= level <= 4  # Should be around M3 (850 km)
@@ -69,6 +65,62 @@ def test_mesh_module():
     print(f"✓ Geodesic distance: (0,0) to (0,90) = {d:.0f} km")
     
     print("\n✅ mesh.py: All tests passed!")
+    return True
+
+
+def test_exact_mesh_generation():
+    """Test exact icosahedral mesh generation."""
+    print("\n" + "=" * 60)
+    print("Testing: Exact Mesh Generation")
+    print("=" * 60)
+    
+    from spectral_entropy.mesh import (
+        generate_icosahedral_mesh,
+        merge_meshes,
+        faces_to_edges,
+        compute_exact_edge_lengths,
+        MESH_LEVELS,
+        EARTH_RADIUS_KM,
+    )
+    
+    # Generate mesh hierarchy
+    meshes = generate_icosahedral_mesh(max_level=6)
+    assert len(meshes) == 7
+    print(f"✓ Generated {len(meshes)} mesh levels")
+    
+    # Verify vertex counts
+    assert meshes[0].vertices.shape[0] == 12  # Base icosahedron
+    assert meshes[6].vertices.shape[0] == 40962  # M6
+    print(f"✓ Vertex counts: M0={meshes[0].vertices.shape[0]}, M6={meshes[6].vertices.shape[0]}")
+    
+    # Verify face counts
+    assert meshes[0].faces.shape[0] == 20  # Base icosahedron
+    assert meshes[6].faces.shape[0] == 81920  # M6
+    print(f"✓ Face counts: M0={meshes[0].faces.shape[0]}, M6={meshes[6].faces.shape[0]}")
+    
+    # Verify vertices are on unit sphere
+    for level, mesh in enumerate(meshes):
+        norms = np.linalg.norm(mesh.vertices, axis=1)
+        assert np.allclose(norms, 1.0, atol=1e-6)
+    print(f"✓ All vertices on unit sphere")
+    
+    # Test edge length computation
+    mesh = meshes[3]  # M3
+    senders, receivers = faces_to_edges(mesh.faces)
+    lengths = compute_exact_edge_lengths(mesh.vertices, senders, receivers, in_km=True)
+    
+    mean_length = np.mean(lengths)
+    expected_length = MESH_LEVELS[3].approx_km
+    assert abs(mean_length - expected_length) / expected_length < 0.15  # Within 15%
+    print(f"✓ M3 edge length: {mean_length:.0f} km (expected ~{expected_length:.0f} km)")
+    
+    # Test mesh merging
+    merged = merge_meshes(meshes[2:])  # M2-M6
+    expected_faces = sum(m.faces.shape[0] for m in meshes[2:])
+    assert merged.faces.shape[0] == expected_faces
+    print(f"✓ Merged mesh has {merged.faces.shape[0]} faces")
+    
+    print("\n✅ Exact Mesh Generation: All tests passed!")
     return True
 
 
@@ -187,6 +239,50 @@ def test_power_law_module():
     return True
 
 
+def test_sensitivity_analysis():
+    """Test edge feature sensitivity analysis."""
+    print("\n" + "=" * 60)
+    print("Testing: Sensitivity Analysis")
+    print("=" * 60)
+    
+    from spectral_entropy.extractor import (
+        compute_expected_edge_features,
+        compute_first_layer_sensitivity,
+    )
+    from spectral_entropy.mesh import MESH_LEVELS
+    
+    # Test expected edge features
+    mu_2, cov_2 = compute_expected_edge_features(level=2)
+    mu_6, cov_6 = compute_expected_edge_features(level=6)
+    
+    assert len(mu_2) == 4  # [dist, x, y, z]
+    assert cov_2.shape == (4, 4)
+    print(f"✓ Edge features computed: M2 mean={mu_2[0]:.4f}, M6 mean={mu_6[0]:.4f}")
+    
+    # M2 should have larger normalized distance than M6
+    assert mu_2[0] > mu_6[0]
+    print(f"✓ M2 normalized distance > M6 (as expected)")
+    
+    # Test first layer sensitivity
+    np.random.seed(42)
+    W = np.random.randn(4, 512) * 0.02  # Typical weight initialization
+    b = np.zeros(512)
+    
+    sens_2 = compute_first_layer_sensitivity(W, b, mu_2, cov_2)
+    sens_6 = compute_first_layer_sensitivity(W, b, mu_6, cov_6)
+    
+    assert sens_2 > 0
+    assert sens_6 > 0
+    print(f"✓ Sensitivity: M2={sens_2:.6f}, M6={sens_6:.6f}")
+    
+    # Larger scale edges should have higher sensitivity (larger input features)
+    assert sens_2 > sens_6
+    print(f"✓ M2 sensitivity > M6 (larger features → larger activation)")
+    
+    print("\n✅ Sensitivity Analysis: All tests passed!")
+    return True
+
+
 def test_visualization_module():
     """Test visualize.py functionality (non-display)."""
     print("\n" + "=" * 60)
@@ -301,10 +397,101 @@ def test_full_pipeline():
     return True
 
 
+def test_mesh_config():
+    """Test the mesh configuration functionality."""
+    print("\n" + "=" * 60)
+    print("Testing: Mesh Configuration")
+    print("=" * 60)
+    
+    from spectral_entropy.mesh import (
+        GRAPHCAST_CONFIGS,
+        get_mesh_config,
+        get_edges_per_level,
+        get_edge_indices_by_level,
+        compute_edge_geodesic_length_km,
+    )
+    
+    # Test configuration loading
+    config = get_mesh_config("0.25deg")
+    assert config.name == "GraphCast"
+    assert config.min_level == 2
+    assert config.max_level == 6
+    assert config.n_levels == 5
+    print(f"✓ Config loaded: {config.name}, levels M{config.min_level}-M{config.max_level}")
+    
+    # Test edge counts
+    edge_counts = config.get_level_edge_counts()
+    assert len(edge_counts) == 5
+    assert edge_counts[2] == 960
+    assert edge_counts[6] == 245760
+    print(f"✓ Edge counts correct: M2={edge_counts[2]}, M6={edge_counts[6]}")
+    
+    # Test total edges
+    expected_total = sum(edge_counts.values())
+    assert config.total_edges == expected_total
+    print(f"✓ Total edges: {config.total_edges:,}")
+    
+    # Test edge indices
+    indices = get_edge_indices_by_level(2, 6)
+    assert indices[2] == (0, 960)
+    assert indices[3][0] == 960  # Starts after M2
+    print(f"✓ Edge indices: M2={indices[2]}, M3 starts at {indices[3][0]}")
+    
+    # Test geodesic length computation
+    length_m2 = compute_edge_geodesic_length_km(2)
+    length_m6 = compute_edge_geodesic_length_km(6)
+    assert length_m2 > length_m6  # Coarser levels have longer edges
+    assert 1500 < length_m2 < 2000  # Approximately 1700 km
+    assert 50 < length_m6 < 150    # Approximately 100 km
+    print(f"✓ Edge lengths: M2≈{length_m2:.0f}km, M6≈{length_m6:.0f}km")
+    
+    print("\n✅ Mesh Configuration: All tests passed!")
+    return True
+
+
+def test_edge_classification():
+    """Test edge classification by length."""
+    print("\n" + "=" * 60)
+    print("Testing: Edge Classification")
+    print("=" * 60)
+    
+    from spectral_entropy.mesh import (
+        classify_edges_by_length,
+        MESH_LEVELS,
+    )
+    
+    # Create test edge lengths
+    edge_lengths = np.array([
+        7000,  # M0
+        3500,  # M1
+        1700,  # M2
+        850,   # M3
+        425,   # M4
+        212,   # M5
+        100,   # M6
+    ])
+    
+    masks = classify_edges_by_length(edge_lengths, min_level=0, max_level=6)
+    
+    # Each edge should be classified to exactly one level
+    total_classified = sum(mask.sum() for mask in masks.values())
+    assert total_classified == len(edge_lengths)
+    print(f"✓ All {len(edge_lengths)} edges classified")
+    
+    # Check specific classifications
+    assert masks[0][0]  # 7000 km → M0
+    assert masks[2][2]  # 1700 km → M2
+    assert masks[6][6]  # 100 km → M6
+    print(f"✓ Edge classifications correct")
+    
+    print("\n✅ Edge Classification: All tests passed!")
+    return True
+
+
 def main():
     """Run all tests."""
     print("=" * 60)
-    print("SPECTRAL ENTROPY ANALYSIS - TEST SUITE")
+    print("SPECTRAL ENTROPY ANALYSIS - TEST SUITE (RIGOROUS)")
     print("=" * 60)
     
     results = {}
@@ -314,6 +501,12 @@ def main():
     except Exception as e:
         print(f"\n❌ mesh.py failed: {e}")
         results["mesh"] = False
+    
+    try:
+        results["exact_mesh"] = test_exact_mesh_generation()
+    except Exception as e:
+        print(f"\n❌ Exact mesh generation failed: {e}")
+        results["exact_mesh"] = False
     
     try:
         results["entropy"] = test_entropy_module()
@@ -328,6 +521,12 @@ def main():
         results["power_law"] = False
     
     try:
+        results["sensitivity"] = test_sensitivity_analysis()
+    except Exception as e:
+        print(f"\n❌ Sensitivity analysis failed: {e}")
+        results["sensitivity"] = False
+    
+    try:
         results["visualize"] = test_visualization_module()
     except Exception as e:
         print(f"\n❌ visualize.py failed: {e}")
@@ -339,6 +538,18 @@ def main():
         print(f"\n❌ Full pipeline failed: {e}")
         results["pipeline"] = False
     
+    try:
+        results["mesh_config"] = test_mesh_config()
+    except Exception as e:
+        print(f"\n❌ Mesh config failed: {e}")
+        results["mesh_config"] = False
+    
+    try:
+        results["edge_classification"] = test_edge_classification()
+    except Exception as e:
+        print(f"\n❌ Edge classification failed: {e}")
+        results["edge_classification"] = False
+    
     # Summary
     print("\n" + "=" * 60)
     print("TEST SUMMARY")
@@ -347,7 +558,7 @@ def main():
     all_passed = True
     for name, passed in results.items():
         status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"  {name:<15} {status}")
+        print(f"  {name:<20} {status}")
         if not passed:
             all_passed = False
     
